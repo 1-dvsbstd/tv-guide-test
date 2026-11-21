@@ -1,6 +1,11 @@
 name: Update LeCy EPG
 
 on:
+  push:
+    paths:
+      - "scripts/update_epg.py"
+      - "lecy-channel-ids.csv"
+      - ".github/workflows/update-epg.yml"
   schedule:
     - cron: "17 */12 * * *"
   workflow_dispatch:
@@ -14,8 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build LeCy guide
-        run: |
-          python3 scripts/update_epg.py
+        run: python3 scripts/update_epg.py
       - name: Commit updated guide
         run: |
           git config user.name "github-actions[bot]"
