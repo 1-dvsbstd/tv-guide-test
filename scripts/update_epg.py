@@ -21,21 +21,36 @@ ALIASES = {
 }
 
 def normalise(value):
-    value = (value or "").strip().lower()
-    value = re.sub(r"(fhd|uhd|hd|sd)(?=\.)", "", value)
-    return re.sub(r"[^a-z0-9]", "", value)
+    value = (value or "").lower()
+    value = re.sub(r"\([^)]*(fhd|uhd|hd|sd|1080p|720p|576p|5\.1)[^)]*\)", "", value)
+    value = re.sub(r"\b(fhd|uhd|hd|sd|1080p|720p|576p|5\.1)\b", "", value)
+    value = value.replace("&", " and ")
+    return re.sub(r"[^a-z0-9]+", "", value)
 
 with open(CATALOGUE, newline="", encoding="utf-8-sig") as handle:
-    lecy_ids = sorted({row["epg_channel_id"].strip() for row in csv.DictReader(handle) if row.get("epg_channel_id", "").strip()})
-normalised = {}
-for channel_id in lecy_ids:
-    normalised.setdefault(normalise(channel_id), []).append(channel_id)
+    rows = list(csv.DictReader(handle))
 
-def target_id(source_id):
+lecy_ids = sorted({row["epg_channel_id"].strip() for row in rows if row.get("epg_channel_id", "").strip()})
+normalised_ids = {}
+for channel_id in lecy_ids:
+    normalised_ids.setdefault(normalise(channel_id), []).append(channel_id)
+
+name_candidates = {}
+for row in rows:
+    channel_id = row.get("epg_channel_id", "").strip()
+    channel_name = row.get("name", "").strip()
+    if channel_id and channel_name:
+        name_candidates.setdefault(normalise(channel_name), set()).add(channel_id)
+
+name_map = {key: next(iter(values)) for key, values in name_candidates.items() if len(values) == 1}
+
+def target_id(source_id, display_name):
     if source_id in ALIASES:
         return ALIASES[source_id]
-    matches = normalised.get(normalise(source_id), [])
-    return matches[0] if len(matches) == 1 else None
+    id_matches = normalised_ids.get(normalise(source_id), [])
+    if len(id_matches) == 1:
+        return id_matches[0]
+    return name_map.get(normalise(display_name))
 
 merged_channels = {}
 merged_programmes = {}
@@ -46,10 +61,12 @@ for source_url in SOURCES:
     if payload[:2] == b"\x1f\x8b":
         payload = gzip.decompress(payload)
     source_root = ET.fromstring(payload)
+
     source_map = {}
     for channel in source_root.findall("channel"):
         source_id = channel.get("id", "")
-        destination_id = target_id(source_id)
+        display_name = channel.findtext("display-name", "")
+        destination_id = target_id(source_id, display_name)
         if not destination_id:
             continue
         source_map[source_id] = destination_id
@@ -57,6 +74,7 @@ for source_url in SOURCES:
             copy = ET.fromstring(ET.tostring(channel, encoding="utf-8"))
             copy.set("id", destination_id)
             merged_channels[destination_id] = copy
+
     for programme in source_root.findall("programme"):
         destination_id = source_map.get(programme.get("channel", ""))
         if not destination_id:
@@ -74,5 +92,6 @@ for channel_id in sorted(merged_channels):
     root.append(merged_channels[channel_id])
 for key in sorted(merged_programmes):
     root.append(merged_programmes[key])
+
 ET.indent(root, space="  ")
 ET.ElementTree(root).write(OUTPUT, encoding="utf-8", xml_declaration=True)
